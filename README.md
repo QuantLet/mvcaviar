@@ -8,7 +8,7 @@ Author: Yegor Klochkov
 
 Estimating a Multivariate Conditional Auto-Regressive Value at Risk model (CAViaR) requires adaptation to possibly time varying parameter. Following the strategy of Spokoiny (2009) one can consider a sequence of included time intervals with the same end point, testing each of them agains the largest included one for homogeneity. Performing the tests independently one can choose the largest interval that is not rejected for estimation in order to have the least variance with modelrately small bias. The standard way to test homogeneity is via Change Point detection. The critical values can be estimated using Multiplier Bootstrap procedure Spokoiny, Zhilova (2013).
 
-This is an implimentation of a joint work with Xiu Xu.
+This is an implimentation of a joint work with Xiu Xu and Wolfgang Härdle
 
 ## Acknoledgements:
 
