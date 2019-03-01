@@ -1,102 +1,107 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Mar 25 14:39:07 2017
+
+@author: egor
+"""
 import sys
-
 import numpy as np
-from pandas import read_csv, DataFrame
-from scipy.stats import norm
-import matplotlib.pyplot as plt
-import seaborn as sns
-from math import ceil
+from math import sqrt, pi, erf, cos, sin, exp
 
+"""
+TASKS:
+     
+    !!!) iterative optimization probably makes sense
+    
+"""
 
-import estimator
-from misc import *
-import adaptation
+from optmulti import multistart_optimization
+import mvcaviar
+import ts_estimation_preparator
 
+from pandas import read_csv
+from bootstrap_change_point import bstrap_cp_test
 
-################################################################################
-#  
-#  the complete reproduction of the simulations is done in three steps:
-#
-#  1) simulate the data by simulations.py
-#  
-#  2) produce the bootstrap values using adaptation_full; script.py helps to run independent tasks in separate processes
-#
-#  3) collect all the bvals, decide the interval lenght and conduct the one step ahead prediction using estimate_with_window; script_ahead.py helps to do it in parallel
 #
 #
 #
+#
+#
+def prepare():
+    Y = np.loadtxt('crix_data/CRIX_ETH_returns_20150810_20180116.txt').T
+    model = mvcaviar.mvcaviar_model(Y, 1, [.01, .01])
+    b_cp = ts_estimation_preparator.ts_estimation_preparator(model)
 
-def adaptation_full(dump=False):
-    assert (len(sys.argv) == 1 or len(sys.argv) == 3)
+    tmax = np.shape(Y)[1]
+    edges = [x for x in reversed(range(tmax, 0, -30))]
+    
+    b_cp.do_preparation(edges, mvcaviar.estimate)
+    b_cp.save_preparation("my_prep")
+    b_cp.load_preparation("my_prep")
 
-    tau = .1
-    quantile = norm.ppf(tau)
+def test_prepare():
+    Y = np.loadtxt('crix_data/CRIX_ETH_returns_20150810_20180116.txt').T
+    model = mvcaviar.mvcaviar_model(Y, 1, [.01, .01])
+    b_cp = ts_estimation_preparator.ts_estimation_preparator(model)
+    b_cp.load_preparation("my_prep")
+    print(b_cp.prep_edges)
 
-    Y = read_csv('sim_ts.csv', header=None).values.T
-    sigmas = read_csv('sim_sigmas.csv', header=None).values.T
+    tmax = np.shape(Y)[1]
+    interval = (tmax- 24, tmax -1)
+    print(interval)
+    print(b_cp.get_prepared_pars(interval))
 
-    (tmax, n) = np.shape(Y)
-    step = 20
-    min_t = 60
+def test_btest():
+    Y = np.loadtxt('crix_data/CRIX_ETH_returns_20150810_20180116.txt').T
+    model = mvcaviar.mvcaviar_model(Y, 1, [.01, .01])
+    b_cp = ts_estimation_preparator.ts_estimation_preparator(model)
+    b_cp.load_preparation("my_prep")
 
-    if len(sys.argv) == 1:
-        end_points = range(tmax, min_t, -step)
-        filename = "bvals_{}to{}step{}.csv".format(tmax, min_t, step)
-    else:
-        end = (int(sys.argv[1]) // step) * step
-        start = int(sys.argv[2])
+    tmax = np.shape(Y)[1]
 
-        assert (start >= min_t)
-        assert (end <= tmax)
+    lens = [60, 75, 94, 118, 148, 185, 231, 289, 361, 451, 500]
 
-        end_points = range(end, start, -step)
-        filename = "bvals_{}to{}step{}.csv".format(end, start, step)
+    vals = []
+    vals09 = []
+    vals08 = []
+    for i in range(len(lens) - 1):
+        interval = (tmax- lens[i + 1], tmax)
+        breks = list(range(tmax - lens[i], tmax - lens[i + 1], -5))
 
-    print("doing {} .....".format(filename))
+        (val, bvals) = bstrap_cp_test(model, interval, breks, 
+                                  mvcaviar.estimate_simple, mvcaviar.estimate_with_break_simple, 
+                                  b_cp, 48)
 
-    lengths = [ceil(60 * (1.25 ** k)) for k in range(8)]
+        vals.append(val)
+        vals08.append(np.percentile(bvals, 80))
+        vals09.append(np.percentile(bvals, 90))
 
-    if not dump:
-        results = {}
-        for end_t in end_points:
-            for i in range(1, len(lengths)):
-                if end_t < lengths[i]:
-                    break
-                message = "time{}length{}vs{}".format(end_t, lengths[i], lengths[i - 1])
-                val, bvals = adaptation.bstrap_cp_test(
-                    Y[(end_t - lengths[i]):end_t, :], tau, [lengths[i] - lengths[i - 1]], 30,
-                    message=message, prev_quantile=sigmas[end_t - lengths[i], :] * quantile
-                )
-                results[message] = [val] + bvals
+    print("test", vals)
+    print("20", vals08)
+    print("10", vals09)
 
-        df = DataFrame.from_dict(results)
-        df.to_csv(filename)
+def test_rolling_window():
+    Y = np.loadtxt('crix_data/CRIX_ETH_returns_20150810_20180116.txt').T
+    model = mvcaviar.mvcaviar_model(Y, 1, [.01, .01])
+    prep = ts_estimation_preparator.ts_estimation_preparator(model)
+    prep.load_preparation("my_prep")
+    print(prep.prep_edges)
 
+    tmax = np.shape(Y)[1]
+    length = 180
+    step = 10
 
-def estimate_with_window():
-    assert(len(sys.argv) == 4)
+    intervals = [ (start, start + length) for start in reversed(range(tmax - length, 1, -step))]
 
-    end_t = int(sys.argv[1])
-    start_t = int(sys.argv[2])
-    length = int(sys.argv[3])
+    pars = ts_estimation_preparator.rolling_window(
+            model, intervals, mvcaviar.estimate, prep, 
+            strategy = {"prev3" : True, "global" : False, "firstmulti": True, "prep": False}
+        )
 
-    tau= 0.1
-    Y = read_csv('sim_ts.csv', header=None).values.T
-
-    predict_ahead = []
-    for t in range(end_t, start_t, -1):
-        res = estimator.train_mvcaviar(Y[end_t - length: t], tau, epochs=10000, verbose=False)
-
-        quant_last = res.y_predict[[-1], :]
-        x_last = np.abs(Y[[t-1], :])
-
-        quant_next = np.matmul(quant_last, res.pars['recurrent']) + np.matmul(x_last, res.pars['kernel']) + res.pars['bias']
-        predict_ahead.append(quant_next[0])
-
-    filename = "ahead_{}to{}length{}.csv".format(end_t, start_t, length)
-    np.savetxt(filename, np.array(predict_ahead), delimiter=',')
-
+    name = "rollwin_len" + str(length) + "step" + str(step) + ".txt"
+    np.savetxt(name, pars)
 
 
-if __name__ == "__main__":
-    estimate_with_window()
+if __name__ == '__main__':
+    test_btest()
+
